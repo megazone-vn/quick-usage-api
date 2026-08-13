@@ -1,0 +1,253 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Amazon Quick Usage Dashboard API - Lambda + API Gateway + Cognito
+
+Parameters:
+  ChatLogGroup:
+    Type: String
+    Default: "/aws/quicksight/chat-logs"
+    Description: CloudWatch Log Group for Quick chat logs
+
+  FeedbackLogGroup:
+    Type: String
+    Default: "/aws/quicksight/feedback-logs"
+    Description: CloudWatch Log Group for Quick feedback logs
+
+  AgentHoursLogGroup:
+    Type: String
+    Default: "/aws/quicksight/agent-hours-logs"
+    Description: CloudWatch Log Group for Quick agent hours logs
+
+  IndexUsageLogGroup:
+    Type: String
+    Default: "/aws/quicksight/index-usage-logs"
+    Description: CloudWatch Log Group for Quick index usage logs
+
+Resources:
+
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # COGNITO
+  # ═══════════════════════════════════════════════════════════════════════════════
+
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: quick-dashboard-users
+      AutoVerifiedAttributes:
+        - email
+      UsernameAttributes:
+        - email
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+          RequireUppercase: true
+      Schema:
+        - Name: email
+          AttributeDataType: String
+          Required: true
+          Mutable: true
+
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: quick-dashboard-web
+      UserPoolId: !Ref UserPool
+      GenerateSecret: false
+      ExplicitAuthFlows:
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+        - ALLOW_USER_SRP_AUTH
+      SupportedIdentityProviders:
+        - COGNITO
+      AllowedOAuthFlows:
+        - implicit
+      AllowedOAuthScopes:
+        - openid
+        - email
+        - profile
+      AllowedOAuthFlowsUserPoolClient: true
+      CallbackURLs:
+        - http://localhost:3000
+        - http://localhost:5173
+      LogoutURLs:
+        - http://localhost:3000
+        - http://localhost:5173
+
+  UserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: quick-dashboard-auth
+      UserPoolId: !Ref UserPool
+
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # IAM ROLE
+  # ═══════════════════════════════════════════════════════════════════════════════
+
+  QuickLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: quick-dashboard-lambda-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: CloudWatchLogsRead
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:StartQuery
+                  - logs:GetQueryResults
+                  - logs:DescribeLogGroups
+                  - logs:DescribeLogStreams
+                  - logs:GetLogEvents
+                Resource: "*"
+
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # LAMBDA
+  # ═══════════════════════════════════════════════════════════════════════════════
+
+  QuickFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: quick-dashboard-api
+      Runtime: python3.12
+      Handler: quick_lambda.lambda_handler
+      Code:
+        ZipFile: |
+          def lambda_handler(event, context):
+              return {"statusCode": 200, "body": "Deploying..."}
+      Role: !GetAtt QuickLambdaRole.Arn
+      Timeout: 60
+      MemorySize: 256
+      Environment:
+        Variables:
+          CHAT_LOG_GROUP: !Ref ChatLogGroup
+          FEEDBACK_LOG_GROUP: !Ref FeedbackLogGroup
+          AGENT_HOURS_LOG_GROUP: !Ref AgentHoursLogGroup
+          INDEX_USAGE_LOG_GROUP: !Ref IndexUsageLogGroup
+
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # API GATEWAY
+  # ═══════════════════════════════════════════════════════════════════════════════
+
+  QuickApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: quick-dashboard-api
+      Description: Amazon Quick Usage Dashboard API
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+
+  CognitoAuthorizer:
+    Type: AWS::ApiGateway::Authorizer
+    Properties:
+      Name: CognitoAuth
+      Type: COGNITO_USER_POOLS
+      RestApiId: !Ref QuickApi
+      IdentitySource: method.request.header.Authorization
+      ProviderARNs:
+        - !GetAtt UserPool.Arn
+
+  # /quick resource
+  QuickResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref QuickApi
+      ParentId: !GetAtt QuickApi.RootResourceId
+      PathPart: quick
+
+  # /quick/{proxy+}
+  ProxyResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref QuickApi
+      ParentId: !Ref QuickResource
+      PathPart: "{proxy+}"
+
+  ProxyMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref QuickApi
+      ResourceId: !Ref ProxyResource
+      HttpMethod: ANY
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !Ref CognitoAuthorizer
+      RequestParameters:
+        method.request.path.proxy: true
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${QuickFunction.Arn}/invocations"
+
+  ProxyOptions:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref QuickApi
+      ResourceId: !Ref ProxyResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,Authorization'"
+              method.response.header.Access-Control-Allow-Methods: "'GET,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+            ResponseTemplates:
+              application/json: ''
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  ApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - ProxyMethod
+      - ProxyOptions
+    Properties:
+      RestApiId: !Ref QuickApi
+
+  ApiStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      RestApiId: !Ref QuickApi
+      DeploymentId: !Ref ApiDeployment
+      StageName: prod
+
+  LambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref QuickFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${QuickApi}/*"
+
+Outputs:
+  ApiUrl:
+    Description: Quick Dashboard API URL
+    Value: !Sub "https://${QuickApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
+
+  UserPoolId:
+    Description: Cognito User Pool ID
+    Value: !Ref UserPool
+
+  UserPoolClientId:
+    Description: Cognito App Client ID
+    Value: !Ref UserPoolClient
