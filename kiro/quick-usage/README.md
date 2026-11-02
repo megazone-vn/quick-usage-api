@@ -152,9 +152,6 @@ curl -s -H "Authorization: Bearer <TOKEN>" "https://<API_URL>/prod/quick/agents?
 curl -s -H "Authorization: Bearer <TOKEN>" "https://<API_URL>/prod/quick/agents?detail=true&by_user=true&from=2026-10-01&to=2026-10-23"
 # ALL-TIME (Bảng 3): queries/conversations/users tích lũy TỪ NGÀY TẠO agent:
 curl -s -H "Authorization: Bearer <TOKEN>" "https://<API_URL>/prod/quick/agents?all_time=true&detail=true&by_user=true"
-# -> owner tra ve EMAIL (resolve UUID identity-store qua Identity Center) + owner_id (UUID goc)
-# -> moi agent co co 'exists' (con ton tai?) va 'is_deleted' (co hoat dong trong log nhung da xoa khoi Quick)
-#    + existing_count / deleted_count o cap response
 
 # ═══ SPACES & KB (từ index-usage) ═══
 curl -s -H "Authorization: Bearer <TOKEN>" "https://<API_URL>/prod/quick/spaces"
@@ -172,16 +169,10 @@ curl -s -H "Authorization: Bearer <TOKEN>" "https://<API_URL>/prod/quick/assets?
 # ═══ REPORT (bảng tổng hợp per-user — Bảng 1 + Bảng 2) ═══
 curl -s -H "Authorization: Bearer <TOKEN>" "https://<API_URL>/prod/quick/report"
 curl -s -H "Authorization: Bearer <TOKEN>" "https://<API_URL>/prod/quick/report?from=2026-09-23&to=2026-10-23"
-# -> Bang 1: total_queries, total_conversations, last_activity_date (per user)
-# -> Bang 2 "Used": chat_agents_used, flows_used, research_used_hours
-# -> Bang 2 "Created" (per user): spaces_created (owner=email), flows_created + chat_agents_created
-#    (resolve Creator UUID -> email qua Identity Center). + *_created_total o cap account.
 # 3 phien ban 7/14/30 ngay:
 curl -s -H "Authorization: Bearer <TOKEN>" "https://<API_URL>/prod/quick/report?from=2026-10-16&to=2026-10-23"  # 7 ngay
 curl -s -H "Authorization: Bearer <TOKEN>" "https://<API_URL>/prod/quick/report?from=2026-10-09&to=2026-10-23"  # 14 ngay
 curl -s -H "Authorization: Bearer <TOKEN>" "https://<API_URL>/prod/quick/report?from=2026-09-23&to=2026-10-23"  # 30 ngay
-# Chi can Used + last_activity (bo qua goi QuickSight API cho NHANH): enrich=false -> Created = null
-curl -s -H "Authorization: Bearer <TOKEN>" "https://<API_URL>/prod/quick/report?from=2026-10-01&to=2026-10-23&enrich=false"
 
 # ═══ FILTER USER ═══
 curl -s -H "Authorization: Bearer <TOKEN>" "https://<API_URL>/prod/quick/chat?user=nhinl@megazone.com"
@@ -215,16 +206,6 @@ curl -s -H "Authorization: Bearer <TOKEN>" "https://<API_URL>/prod/quick/chat?us
 | `/quick/spaces` | Rollup Space & Knowledge Base từ index-usage (size, doc count, users) |
 | `/quick/report` | Bảng per-user: total_queries, last_activity_date, Created/Used (Bảng 1+2) |
 | `/quick/assets` | Số tạo + ngày tạo + owner của spaces/flows/agents (QuickSight API) |
-
-### Bản đồ 3 bảng báo cáo → endpoint
-
-| Bảng (trong tài liệu) | Endpoint | Field chính |
-|---|---|---|
-| **Bảng 1** — Queries & Conversations theo User | `/quick/report` | `total_queries`, `total_conversations`, `last_activity_date` |
-| **Bảng 2** — Feature Usage theo User | `/quick/report` | `spaces_created`/`flows_created`/`chat_agents_created` (Created, per-user) + `*_used` |
-| **Bảng 3** — Danh sách Chat Agent (all-time) | `/quick/agents?all_time=true&detail=true` | `agent_name`, `owner`(email), `created_date`, `number_of_users/queries/conversations`, `exists`/`is_deleted` |
-
-> **Ngoại lệ:** "Research Created" không có — Quick không có khái niệm asset research (chỉ đo `research_used_hours`). Agent đã bị xoá khỏi Quick vẫn còn hoạt động trong log → `agent_name/created_date = null`, đánh dấu `is_deleted=true`.
 
 
 ### Query Parameters
