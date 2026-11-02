@@ -29,11 +29,25 @@ aws cloudformation deploy \
 
 ### Bước 2: Upload Lambda code
 
+> ⚠️ **boto3 mới bắt buộc cho endpoint enrich.** Các API agent của Quick Suite
+> (`list_agents`, `describe_agent`, `list_spaces`, ...) chỉ có trong boto3 đủ mới.
+> boto3 **bundled sẵn trong Lambda runtime quá cũ** -> sẽ báo
+> `'QuickSight' object has no attribute 'list_agents'` và `/quick/agents` trả
+> `agent_name=null`. Phải **đóng gói boto3 mới kèm code** (không dùng bản bundled):
+
 ```bash
-zip quick_package.zip quick_lambda.py
+# Package kèm boto3 mới (bắt buộc cho /quick/agents enrich)
+mkdir build && pip install boto3 --target build && cp quick_lambda.py build/
+cd build && zip -r ../quick_package.zip . && cd ..
 aws lambda update-function-code --function-name quick-dashboard-api --zip-file fileb://quick_package.zip
-rm quick_package.zip
+rm -rf build quick_package.zip
 ```
+
+> Nếu KHÔNG cần enrich (chỉ endpoint đọc log), bản tối giản vẫn chạy:
+> `zip quick_package.zip quick_lambda.py` rồi update-function-code như cũ.
+
+> **Env var:** đặt `QS_ACCOUNT_ID=<account-id>` cho Lambda để bỏ phụ thuộc STS
+> khi resolve account cho các call QuickSight (không bắt buộc nhưng khuyến nghị).
 
 ### Bước 3: Lấy thông tin stack
 
@@ -126,6 +140,49 @@ curl -s -H "Authorization: Bearer <TOKEN>" "https://<API_URL>/prod/quick/users"
 curl -s -H "Authorization: Bearer <TOKEN>" "https://<API_URL>/prod/quick/conversations"
 curl -s -H "Authorization: Bearer <TOKEN>" "https://<API_URL>/prod/quick/conversations?id=<CONVERSATION_ID>"
 
+# ═══ AGENTS (rollup theo agent_id) ═══
+curl -s -H "Authorization: Bearer <TOKEN>" "https://<API_URL>/prod/quick/agents"
+# + owner / welcome / instruction (describe-agent, chậm hơn):
+curl -s -H "Authorization: Bearer <TOKEN>" "https://<API_URL>/prod/quick/agents?detail=true"
+# + breakdown theo TỪNG USER dùng agent đó:
+curl -s -H "Authorization: Bearer <TOKEN>" "https://<API_URL>/prod/quick/agents?by_user=true"
+# gộp cả hai (đủ info agent theo từng user):
+curl -s -H "Authorization: Bearer <TOKEN>" "https://<API_URL>/prod/quick/agents?detail=true&by_user=true"
+# lọc theo KHOẢNG THỜI GIAN (hoạt động chat của agent trong khoảng from..to):
+curl -s -H "Authorization: Bearer <TOKEN>" "https://<API_URL>/prod/quick/agents?detail=true&by_user=true&from=2026-10-01&to=2026-10-23"
+# ALL-TIME (Bảng 3): queries/conversations/users tích lũy TỪ NGÀY TẠO agent:
+curl -s -H "Authorization: Bearer <TOKEN>" "https://<API_URL>/prod/quick/agents?all_time=true&detail=true&by_user=true"
+# -> owner tra ve EMAIL (resolve UUID identity-store qua Identity Center) + owner_id (UUID goc)
+# -> moi agent co co 'exists' (con ton tai?) va 'is_deleted' (co hoat dong trong log nhung da xoa khoi Quick)
+#    + existing_count / deleted_count o cap response
+
+# ═══ SPACES & KB (từ index-usage) ═══
+curl -s -H "Authorization: Bearer <TOKEN>" "https://<API_URL>/prod/quick/spaces"
+
+# ═══ ASSETS (số TẠO + ngày tạo + owner, từ QuickSight API) ═══
+curl -s -H "Authorization: Bearer <TOKEN>" "https://<API_URL>/prod/quick/assets"
+# -> tra ve: spaces_created/flows_created/agents_created (TRONG khoang from/to)
+#    + spaces_total/flows_total/agents_total (TONG toan bo) + list tung asset
+#    (spaces co owner; flows co run_count; agents co created date)
+# Loc theo khoang thoi gian (asset tao trong khoang): dung from/to nhu cac endpoint khac
+curl -s -H "Authorization: Bearer <TOKEN>" "https://<API_URL>/prod/quick/assets?from=2026-10-01&to=2026-10-23"
+# Dem TAT CA asset bat ke ngay tao:
+curl -s -H "Authorization: Bearer <TOKEN>" "https://<API_URL>/prod/quick/assets?all_time=true"
+
+# ═══ REPORT (bảng tổng hợp per-user — Bảng 1 + Bảng 2) ═══
+curl -s -H "Authorization: Bearer <TOKEN>" "https://<API_URL>/prod/quick/report"
+curl -s -H "Authorization: Bearer <TOKEN>" "https://<API_URL>/prod/quick/report?from=2026-09-23&to=2026-10-23"
+# -> Bang 1: total_queries, total_conversations, last_activity_date (per user)
+# -> Bang 2 "Used": chat_agents_used, flows_used, research_used_hours
+# -> Bang 2 "Created" (per user): spaces_created (owner=email), flows_created + chat_agents_created
+#    (resolve Creator UUID -> email qua Identity Center). + *_created_total o cap account.
+# 3 phien ban 7/14/30 ngay:
+curl -s -H "Authorization: Bearer <TOKEN>" "https://<API_URL>/prod/quick/report?from=2026-10-16&to=2026-10-23"  # 7 ngay
+curl -s -H "Authorization: Bearer <TOKEN>" "https://<API_URL>/prod/quick/report?from=2026-10-09&to=2026-10-23"  # 14 ngay
+curl -s -H "Authorization: Bearer <TOKEN>" "https://<API_URL>/prod/quick/report?from=2026-09-23&to=2026-10-23"  # 30 ngay
+# Chi can Used + last_activity (bo qua goi QuickSight API cho NHANH): enrich=false -> Created = null
+curl -s -H "Authorization: Bearer <TOKEN>" "https://<API_URL>/prod/quick/report?from=2026-10-01&to=2026-10-23&enrich=false"
+
 # ═══ FILTER USER ═══
 curl -s -H "Authorization: Bearer <TOKEN>" "https://<API_URL>/prod/quick/chat?user=nhinl@megazone.com"
 curl -s -H "Authorization: Bearer <TOKEN>" "https://<API_URL>/prod/quick/agent-hours?user=nhinl@megazone.com"
@@ -151,15 +208,37 @@ curl -s -H "Authorization: Bearer <TOKEN>" "https://<API_URL>/prod/quick/chat?us
 | `/quick/users` | Usage summary per user |
 | `/quick/conversations` | Danh sách conversations |
 | `/quick/conversations?id=<id>` | Chi tiết 1 conversation |
+| `/quick/agents` | Rollup theo agent_id (queries / conversations / users mỗi agent) + cờ `exists`/`is_deleted` |
+| `/quick/agents?detail=true` | + owner (EMAIL) / welcome / instruction (describe-agent) |
+| `/quick/agents?by_user=true` | + breakdown theo TỪNG USER dùng agent đó (queries/conversations) |
+| `/quick/agents?all_time=true` | queries/conversations/users tích lũy từ ngày tạo agent (Bảng 3) |
+| `/quick/spaces` | Rollup Space & Knowledge Base từ index-usage (size, doc count, users) |
+| `/quick/report` | Bảng per-user: total_queries, last_activity_date, Created/Used (Bảng 1+2) |
+| `/quick/assets` | Số tạo + ngày tạo + owner của spaces/flows/agents (QuickSight API) |
+
+### Bản đồ 3 bảng báo cáo → endpoint
+
+| Bảng (trong tài liệu) | Endpoint | Field chính |
+|---|---|---|
+| **Bảng 1** — Queries & Conversations theo User | `/quick/report` | `total_queries`, `total_conversations`, `last_activity_date` |
+| **Bảng 2** — Feature Usage theo User | `/quick/report` | `spaces_created`/`flows_created`/`chat_agents_created` (Created, per-user) + `*_used` |
+| **Bảng 3** — Danh sách Chat Agent (all-time) | `/quick/agents?all_time=true&detail=true` | `agent_name`, `owner`(email), `created_date`, `number_of_users/queries/conversations`, `exists`/`is_deleted` |
+
+> **Ngoại lệ:** "Research Created" không có — Quick không có khái niệm asset research (chỉ đo `research_used_hours`). Agent đã bị xoá khỏi Quick vẫn còn hoạt động trong log → `agent_name/created_date = null`, đánh dấu `is_deleted=true`.
+
 
 ### Query Parameters
 
 | Param | Format | Mô tả |
 |-------|--------|--------|
-| `from` | `YYYY-MM-DD` | Ngày bắt đầu (default: 7 ngày trước) |
+| `from` | `YYYY-MM-DD` | Ngày bắt đầu (default: 7 ngày trước). Áp cho MỌI endpoint: endpoint log lọc theo thời điểm hoạt động, `/quick/assets` lọc theo `created_at` của asset |
 | `to` | `YYYY-MM-DD` | Ngày kết thúc (default: hôm nay) |
+| `all_time` | `true`/`false` | `/quick/assets`: đếm mọi asset bất kể ngày tạo. `/quick/agents`: tính queries/conversations/users tích lũy từ ngày tạo agent |
 | `user` | email | Filter theo user (partial match) |
 | `limit` | number | Số records tối đa (default: 100) |
+| `detail` | `true`/`false` | (chỉ `/quick/agents`) gọi describe-agent lấy owner(email)/welcome/instruction |
+| `by_user` | `true`/`false` | (chỉ `/quick/agents`) thêm breakdown theo từng user dùng agent |
+| `enrich` | `true`/`false` | (`/quick/agents` & `/quick/report`) `false` = chỉ log, bỏ qua QuickSight API (nhanh, các cột Created/metadata = null) |
 
 ---
 
@@ -206,7 +285,9 @@ aws cloudformation delete-stack --stack-name quick-dashboard-api --region us-eas
 | Cognito App Client | `quick-dashboard-web` | Frontend login |
 | API Gateway | `quick-dashboard-api` | REST endpoint |
 | Lambda | `quick-dashboard-api` | Đọc CloudWatch Logs |
-| IAM Role | `quick-dashboard-lambda-role` | CloudWatch Logs access |
+| IAM Role | `quick-dashboard-lambda-role` | CloudWatch Logs + QuickSight asset read + Identity Store read |
+
+> **IAM:** ngoài CloudWatch Logs và QuickSight (`ListAgents`/`DescribeAgent`/`ListSpaces`/`ListFlows`/`DescribeFlow`), role cần thêm `sso:ListInstances` + `identitystore:DescribeUser` để resolve Creator UUID của agent/flow sang email (xem `identity-store-policy.json`). Nếu thiếu, `/quick/report` sẽ trả `chat_agents_created` không gán được và `/quick/agents` owner vẫn là UUID.
 
 ## Chi phí
 

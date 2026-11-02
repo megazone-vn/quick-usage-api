@@ -24,9 +24,9 @@ Parameters:
 
 Resources:
 
-  # ═══════════════════════════════════════════════════════════════════════════════
+  # ===============================================================================
   # COGNITO
-  # ═══════════════════════════════════════════════════════════════════════════════
+  # ===============================================================================
 
   UserPool:
     Type: AWS::Cognito::UserPool
@@ -81,9 +81,9 @@ Resources:
       Domain: quick-dashboard-auth
       UserPoolId: !Ref UserPool
 
-  # ═══════════════════════════════════════════════════════════════════════════════
+  # ===============================================================================
   # IAM ROLE
-  # ═══════════════════════════════════════════════════════════════════════════════
+  # ===============================================================================
 
   QuickLambdaRole:
     Type: AWS::IAM::Role
@@ -111,10 +111,33 @@ Resources:
                   - logs:DescribeLogStreams
                   - logs:GetLogEvents
                 Resource: "*"
+        - PolicyName: QuickSightAssetRead
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - quicksight:ListAgents
+                  - quicksight:DescribeAgent
+                  - quicksight:ListSpaces
+                  - quicksight:DescribeSpace
+                  - quicksight:ListFlows
+                  - quicksight:DescribeFlow
+                Resource: "*"
+        - PolicyName: IdentityStoreRead
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # Resolve QuickSight Creator UUIDs -> email (flows/agents owner).
+              - Effect: Allow
+                Action:
+                  - sso:ListInstances
+                  - identitystore:DescribeUser
+                Resource: "*"
 
-  # ═══════════════════════════════════════════════════════════════════════════════
+  # ===============================================================================
   # LAMBDA
-  # ═══════════════════════════════════════════════════════════════════════════════
+  # ===============================================================================
 
   QuickFunction:
     Type: AWS::Lambda::Function
@@ -136,9 +159,9 @@ Resources:
           AGENT_HOURS_LOG_GROUP: !Ref AgentHoursLogGroup
           INDEX_USAGE_LOG_GROUP: !Ref IndexUsageLogGroup
 
-  # ═══════════════════════════════════════════════════════════════════════════════
+  # ===============================================================================
   # API GATEWAY
-  # ═══════════════════════════════════════════════════════════════════════════════
+  # ===============================================================================
 
   QuickApi:
     Type: AWS::ApiGateway::RestApi
